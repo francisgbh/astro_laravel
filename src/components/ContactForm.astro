@@ -1,0 +1,372 @@
+---
+const uid = crypto.randomUUID();
+---
+
+<form class="contact-form" novalidate>
+	<div class="honeypot" aria-hidden="true">
+		<label for={`${uid}-website`}>Sitio web</label>
+		<input
+			id={`${uid}-website`}
+			name="website"
+			type="text"
+			tabindex="-1"
+			autocomplete="off"
+		/>
+	</div>
+
+	<div class="field">
+		<label for={`${uid}-name`}>Nombre</label>
+		<input
+			id={`${uid}-name`}
+			name="name"
+			type="text"
+			autocomplete="name"
+			maxlength="255"
+			required
+			aria-describedby={`${uid}-name-error`}
+		/>
+		<p id={`${uid}-name-error`} class="field-error" data-error="name" aria-live="polite"></p>
+	</div>
+
+	<div class="field">
+		<label for={`${uid}-email`}>Email</label>
+		<input
+			id={`${uid}-email`}
+			name="email"
+			type="email"
+			autocomplete="email"
+			maxlength="255"
+			required
+			aria-describedby={`${uid}-email-error`}
+		/>
+		<p id={`${uid}-email-error`} class="field-error" data-error="email" aria-live="polite"></p>
+	</div>
+
+	<div class="field">
+		<label for={`${uid}-phone`}>Teléfono</label>
+		<input
+			id={`${uid}-phone`}
+			name="phone"
+			type="tel"
+			autocomplete="tel"
+			maxlength="30"
+			required
+			aria-describedby={`${uid}-phone-error`}
+		/>
+		<p id={`${uid}-phone-error`} class="field-error" data-error="phone" aria-live="polite"></p>
+	</div>
+
+	<div class="field">
+		<label for={`${uid}-message`}>Mensaje</label>
+		<textarea
+			id={`${uid}-message`}
+			name="message"
+			rows="5"
+			maxlength="5000"
+			required
+			aria-describedby={`${uid}-message-error`}
+		></textarea>
+		<p id={`${uid}-message-error`} class="field-error" data-error="message" aria-live="polite"></p>
+	</div>
+
+	<p class="status" data-status role="status" aria-live="polite"></p>
+
+	<button type="submit">Enviar</button>
+</form>
+
+<script>
+	const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+	type ContactResponse = {
+		message?: string;
+		errors?: Record<string, string[]>;
+	};
+
+	function readField(form: HTMLFormElement, name: string): string {
+		const control = form.elements.namedItem(name);
+		if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
+			return control.value.trim();
+		}
+		return '';
+	}
+
+	function showStatus(
+		status: HTMLElement,
+		state: 'success' | 'error' | 'loading',
+		message: string,
+	): void {
+		status.dataset.state = state;
+		status.textContent = message;
+	}
+
+	function setBusy(button: HTMLButtonElement, busy: boolean, label: string): void {
+		button.disabled = busy;
+		button.setAttribute('aria-busy', busy ? 'true' : 'false');
+		button.textContent = busy ? 'Enviando…' : label;
+	}
+
+	function clearFieldErrors(form: HTMLFormElement): void {
+		form.querySelectorAll<HTMLElement>('[data-error]').forEach((el) => {
+			el.textContent = '';
+		});
+		form.querySelectorAll('input, textarea').forEach((control) => {
+			control.removeAttribute('aria-invalid');
+		});
+	}
+
+	function showFieldErrors(form: HTMLFormElement, errors: Record<string, string[]> | undefined): string[] {
+		const shown: string[] = [];
+		if (!errors) return shown;
+
+		for (const [field, messages] of Object.entries(errors)) {
+			const text = (messages ?? []).map((item) => item.trim()).filter(Boolean).join(' ');
+			if (!text) continue;
+
+			const errorEl = form.querySelector<HTMLElement>(`[data-error="${CSS.escape(field)}"]`);
+			const control = form.elements.namedItem(field);
+			if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
+				control.setAttribute('aria-invalid', 'true');
+			}
+			if (errorEl) {
+				errorEl.textContent = text;
+				shown.push(text);
+			}
+		}
+
+		return shown;
+	}
+
+	async function readBody(response: Response): Promise<ContactResponse> {
+		try {
+			const data: unknown = await response.json();
+			if (data && typeof data === 'object') return data as ContactResponse;
+		} catch {
+			// La API a veces responde sin JSON.
+		}
+		return {};
+	}
+
+	const forms = document.querySelectorAll<HTMLFormElement>('.contact-form');
+
+	forms.forEach((form) => {
+		if (form.dataset.bound === 'true') return;
+		form.dataset.bound = 'true';
+
+		const status = form.querySelector<HTMLElement>('[data-status]');
+		const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+		if (!status || !button) return;
+
+		const defaultLabel = button.textContent ?? 'Enviar';
+
+		form.addEventListener('submit', async (event) => {
+			event.preventDefault();
+			clearFieldErrors(form);
+
+			const name = readField(form, 'name');
+			const email = readField(form, 'email');
+			const phone = readField(form, 'phone');
+			const message = readField(form, 'message');
+			const website = readField(form, 'website');
+
+			if (website) {
+				setBusy(button, true, defaultLabel);
+				showStatus(status, 'loading', 'Enviando…');
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+				form.reset();
+				setBusy(button, false, defaultLabel);
+				showStatus(status, 'success', 'Contacto enviado correctamente.');
+				return;
+			}
+
+			if (!name || !email || !phone || !message) {
+				showStatus(status, 'error', 'Completa todos los campos.');
+				return;
+			}
+
+			if (!EMAIL_PATTERN.test(email)) {
+				showStatus(status, 'error', 'Introduce un email válido.');
+				return;
+			}
+
+			const apiUrl = import.meta.env.PUBLIC_CONTACT_API_URL as string | undefined;
+			const apiToken = import.meta.env.PUBLIC_CONTACT_API_TOKEN as string | undefined;
+
+			if (!apiUrl || !apiToken) {
+				showStatus(
+					status,
+					'error',
+					'Falta la configuración del formulario. Revisa las variables de entorno.',
+				);
+				return;
+			}
+
+			setBusy(button, true, defaultLabel);
+			showStatus(status, 'loading', 'Enviando…');
+
+			try {
+				const response = await fetch(apiUrl, {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${apiToken}`,
+						'Content-Type': 'application/json',
+						Accept: 'application/json',
+					},
+					body: JSON.stringify({ name, email, phone, message }),
+				});
+				const body = await readBody(response);
+
+				if (response.status === 201) {
+					form.reset();
+					showStatus(status, 'success', 'Contacto enviado correctamente.');
+					return;
+				}
+
+				if (response.status === 422) {
+					const shown = showFieldErrors(form, body.errors);
+					const leftover = body.message && !shown.includes(body.message) ? body.message : '';
+					showStatus(status, 'error', shown.length ? leftover : body.message || 'Revisa los datos del formulario.');
+					return;
+				}
+
+				if (response.status === 429) {
+					showStatus(
+						status,
+						'error',
+						'Has superado el límite de envíos. Espera un minuto e inténtalo de nuevo.',
+					);
+					return;
+				}
+
+				showStatus(
+					status,
+					'error',
+					body.message || 'No se pudo enviar el formulario. Inténtalo de nuevo.',
+				);
+			} catch {
+				showStatus(status, 'error', 'No se pudo enviar el formulario. Inténtalo de nuevo.');
+			} finally {
+				setBusy(button, false, defaultLabel);
+			}
+		});
+	});
+</script>
+
+<style>
+	.contact-form {
+		position: relative;
+		display: grid;
+		gap: 1rem;
+		font-family: "Segoe UI", system-ui, sans-serif;
+	}
+
+	.honeypot {
+		position: absolute;
+		left: -10000px;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+	}
+
+	.field {
+		display: grid;
+		gap: 0.4rem;
+	}
+
+	label {
+		font-size: 0.92rem;
+		font-weight: 600;
+		color: #243044;
+	}
+
+	input,
+	textarea {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0.65rem 0.8rem;
+		border: 1px solid #d5dbe3;
+		border-radius: 0.6rem;
+		background: #fff;
+		color: #1c2430;
+		font: inherit;
+	}
+
+	input {
+		min-height: 2.75rem;
+	}
+
+	textarea {
+		min-height: 8rem;
+		resize: vertical;
+	}
+
+	input:focus,
+	textarea:focus {
+		outline: 2px solid #1f4d3a;
+		outline-offset: 1px;
+		border-color: #1f4d3a;
+	}
+
+	input[aria-invalid='true'],
+	textarea[aria-invalid='true'] {
+		border-color: #9f2d2d;
+	}
+
+	.field-error {
+		margin: 0;
+		font-size: 0.9rem;
+		color: #9f2d2d;
+	}
+
+	.field-error:empty {
+		display: none;
+	}
+
+	.status {
+		min-height: 1.25rem;
+		margin: 0;
+		font-size: 0.95rem;
+	}
+
+	.status:empty {
+		display: none;
+	}
+
+	.status[data-state='loading'] {
+		color: #5c6675;
+	}
+
+	.status[data-state='success'] {
+		color: #1d6b45;
+	}
+
+	.status[data-state='error'] {
+		color: #9f2d2d;
+	}
+
+	button {
+		justify-self: start;
+		min-height: 2.75rem;
+		padding: 0.7rem 1.25rem;
+		border: 0;
+		border-radius: 0.6rem;
+		background: #1f4d3a;
+		color: #fff;
+		font: inherit;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	button:hover {
+		background: #173b2c;
+	}
+
+	button:focus-visible {
+		outline: 2px solid #1f4d3a;
+		outline-offset: 3px;
+	}
+
+	button:disabled {
+		opacity: 0.7;
+		cursor: wait;
+	}
+</style>
